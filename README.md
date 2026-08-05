@@ -64,7 +64,17 @@ On every machine you want synced:
 
 All clients must use the same PSK and point at the same server/port. Copying
 something on one client updates the clipboard on every other connected
-client.
+client. If a client loses its connection, it automatically retries every 3
+seconds until the server is reachable again.
+
+## Security
+
+Payloads are encrypted with AES-256-GCM (key = SHA-256 of the PSK), which
+provides both confidentiality and integrity — tampered or corrupted packets
+are rejected rather than silently decrypted into garbage. That said, the PSK
+itself is exchanged in the clear as a raw key check on connect, so this is
+suitable for trusted networks, not as a substitute for TLS/mutual auth
+against an active on-path attacker.
 
 ## Known limitations
 
@@ -72,12 +82,6 @@ client.
   client-side; only single files work.
 - **Only the first file in a multi-file selection is sent.** Selecting and
   copying several files at once will sync just one of them.
-- **No auto-reconnect.** If a client loses its connection to the server, it
-  logs a warning and does not attempt to reconnect; restart the client.
-- **No message authentication on the wire.** Payloads are encrypted
-  (AES-256-CBC) but not signed/MACed, so this is not hardened against an
-  active on-path attacker. Treat the PSK as a shared secret for trusted
-  networks, not as a substitute for TLS.
 - Whole files/images are buffered in memory and sent as a single message, so
   very large files will use a correspondingly large amount of RAM on both
   ends.

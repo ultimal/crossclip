@@ -10,6 +10,7 @@
 #include <QStandardPaths>
 #include <QDebug>
 #include <QDataStream>
+#include <QTimer>
 
 #include "crypto.h"
 #include "protocol.h"
@@ -20,6 +21,8 @@ class ClipboardClient : public QObject
 public:
     explicit ClipboardClient(const QString &host, quint16 port, const QString &psk, QObject *parent = nullptr)
         : QObject(parent)
+        , m_host(host)
+        , m_port(port)
         , m_key(Crypto::deriveKey(psk))
         , m_socket(new QTcpSocket(this))
     {
@@ -27,23 +30,57 @@ public:
 
         connect(m_socket, &QTcpSocket::connected, this, &ClipboardClient::onConnected);
         connect(m_socket, &QTcpSocket::readyRead, this, &ClipboardClient::onReadyRead);
-        connect(m_socket, &QTcpSocket::disconnected, this, []() {
-            qWarning() << "Disconnected from server – will not reconnect automatically";
-        });
+        connect(m_socket, &QTcpSocket::disconnected, this, &ClipboardClient::onDisconnected);
+        connect(m_socket, &QTcpSocket::errorOccurred, this, &ClipboardClient::onSocketError);
 
         // Local clipboard → send to server
         connect(m_clipboard, &QClipboard::dataChanged, this, &ClipboardClient::onLocalClipboardChanged);
 
-        qInfo() << "Connecting to" << host << ":" << port << "...";
-        m_socket->connectToHost(host, port);
+        connectToServer();
     }
 
 private slots:
+    void connectToServer()
+    {
+        qInfo() << "Connecting to" << m_host << ":" << m_port << "...";
+        m_socket->connectToHost(m_host, m_port);
+    }
+
     void onConnected()
     {
         // Authenticate
         m_socket->write(m_key);
         qInfo() << "Connected – authenticating...";
+    }
+
+    void onDisconnected()
+    {
+        qWarning() << "Disconnected from server – reconnecting in"
+                    << kReconnectDelayMs / 1000 << "s";
+        scheduleReconnect();
+    }
+
+    void onSocketError(QAbstractSocket::SocketError)
+    {
+        qWarning() << "Socket error:" << m_socket->errorString()
+                    << "– reconnecting in" << kReconnectDelayMs / 1000 << "s";
+        scheduleReconnect();
+    }
+
+    void scheduleReconnect()
+    {
+        m_authenticated = false;
+        m_buffer.clear();
+
+        if (m_reconnectPending)
+            return;
+        m_reconnectPending = true;
+
+        QTimer::singleShot(kReconnectDelayMs, this, [this]() {
+            m_reconnectPending = false;
+            m_socket->abort();
+            connectToServer();
+        });
     }
 
     void onReadyRead()
@@ -199,12 +236,17 @@ private slots:
     }
 
 private:
+    static constexpr int kReconnectDelayMs = 3000;
+
+    QString m_host;
+    quint16 m_port;
     QByteArray m_key;
     QTcpSocket *m_socket;
     QClipboard *m_clipboard = nullptr;
     QByteArray m_buffer;
     bool m_authenticated = false;
     bool m_ignoreNextChange = false;
+    bool m_reconnectPending = false;
 };
 
 #include "client.moc"

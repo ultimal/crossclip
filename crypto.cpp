@@ -3,9 +3,20 @@
 #include <QRandomGenerator>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <cstring>
 #include <stdexcept>
 
 namespace Crypto {
+
+namespace {
+constexpr int kIvLen = 12;
+constexpr int kTagLen = 16;
+
+struct CtxGuard {
+    EVP_CIPHER_CTX *ctx;
+    ~CtxGuard() { EVP_CIPHER_CTX_free(ctx); }
+};
+} // namespace
 
 QByteArray deriveKey(const QString &psk)
 {
@@ -17,18 +28,24 @@ QByteArray encrypt(const QByteArray &plaintext, const QByteArray &key)
     if (key.size() != 32)
         throw std::runtime_error("Key must be 32 bytes");
 
-    unsigned char iv[16];
+    unsigned char iv[kIvLen];
     if (RAND_bytes(iv, sizeof(iv)) != 1)
         throw std::runtime_error("Failed to generate IV");
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx)
         throw std::runtime_error("EVP_CIPHER_CTX_new failed");
+    CtxGuard guard{ctx};
 
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr,
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1)
+        throw std::runtime_error("EVP_EncryptInit_ex failed");
+
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, kIvLen, nullptr) != 1)
+        throw std::runtime_error("Failed to set GCM IV length");
+
+    if (EVP_EncryptInit_ex(ctx, nullptr, nullptr,
                            reinterpret_cast<const unsigned char*>(key.constData()),
                            iv) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
         throw std::runtime_error("EVP_EncryptInit_ex failed");
     }
 
@@ -41,7 +58,6 @@ QByteArray encrypt(const QByteArray &plaintext, const QByteArray &key)
                           &len,
                           reinterpret_cast<const unsigned char*>(plaintext.constData()),
                           plaintext.size()) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
         throw std::runtime_error("EVP_EncryptUpdate failed");
     }
     ciphertext_len = len;
@@ -49,38 +65,49 @@ QByteArray encrypt(const QByteArray &plaintext, const QByteArray &key)
     if (EVP_EncryptFinal_ex(ctx,
                             reinterpret_cast<unsigned char*>(ciphertext.data()) + len,
                             &len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
         throw std::runtime_error("EVP_EncryptFinal_ex failed");
     }
     ciphertext_len += len;
-    EVP_CIPHER_CTX_free(ctx);
-
     ciphertext.resize(ciphertext_len);
 
-    // Prepend IV
+    unsigned char tag[kTagLen];
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, kTagLen, tag) != 1)
+        throw std::runtime_error("Failed to get GCM tag");
+
     QByteArray result;
-    result.append(reinterpret_cast<const char*>(iv), 16);
+    result.reserve(kIvLen + ciphertext.size() + kTagLen);
+    result.append(reinterpret_cast<const char*>(iv), kIvLen);
     result.append(ciphertext);
+    result.append(reinterpret_cast<const char*>(tag), kTagLen);
     return result;
 }
 
 QByteArray decrypt(const QByteArray &data, const QByteArray &key)
 {
-    if (key.size() != 32 || data.size() < 17)
+    if (key.size() != 32 || data.size() < kIvLen + kTagLen)
         throw std::runtime_error("Invalid data or key");
 
     const unsigned char *iv = reinterpret_cast<const unsigned char*>(data.constData());
-    const unsigned char *ciphertext = iv + 16;
-    int ciphertext_len = data.size() - 16;
+    const unsigned char *ciphertext = iv + kIvLen;
+    int ciphertext_len = data.size() - kIvLen - kTagLen;
+
+    unsigned char tag[kTagLen];
+    std::memcpy(tag, data.constData() + data.size() - kTagLen, kTagLen);
 
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx)
         throw std::runtime_error("EVP_CIPHER_CTX_new failed");
+    CtxGuard guard{ctx};
 
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr,
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1)
+        throw std::runtime_error("EVP_DecryptInit_ex failed");
+
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, kIvLen, nullptr) != 1)
+        throw std::runtime_error("Failed to set GCM IV length");
+
+    if (EVP_DecryptInit_ex(ctx, nullptr, nullptr,
                            reinterpret_cast<const unsigned char*>(key.constData()),
                            iv) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
         throw std::runtime_error("EVP_DecryptInit_ex failed");
     }
 
@@ -93,19 +120,19 @@ QByteArray decrypt(const QByteArray &data, const QByteArray &key)
                           &len,
                           ciphertext,
                           ciphertext_len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
         throw std::runtime_error("EVP_DecryptUpdate failed");
     }
     plaintext_len = len;
 
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, kTagLen, tag) != 1)
+        throw std::runtime_error("Failed to set GCM tag");
+
     if (EVP_DecryptFinal_ex(ctx,
                             reinterpret_cast<unsigned char*>(plaintext.data()) + len,
                             &len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw std::runtime_error("EVP_DecryptFinal_ex failed (wrong key?)");
+        throw std::runtime_error("Authentication failed (tampered data or wrong key)");
     }
     plaintext_len += len;
-    EVP_CIPHER_CTX_free(ctx);
 
     plaintext.resize(plaintext_len);
     return plaintext;
