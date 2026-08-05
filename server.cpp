@@ -1,4 +1,4 @@
-#include <QGuiApplication>
+#include <QCoreApplication>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QDebug>
@@ -140,9 +140,7 @@ private:
 
 int main(int argc, char *argv[])
 {
-    qputenv("QT_QPA_PLATFORM", "xcb");
-
-    QGuiApplication app(argc, argv);
+    QCoreApplication app(argc, argv);
 
     if (argc < 3) {
         qCritical() << "Usage:" << argv[0] << "<psk> <port>";

@@ -13,7 +13,7 @@ add_executable(server
     crypto.cpp
 )
 target_link_libraries(server PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Network
+    Qt6::Core Qt6::Network
     OpenSSL::Crypto
 )
 

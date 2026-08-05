@@ -211,8 +211,6 @@ private:
 
 int main(int argc, char *argv[])
 {
-    qputenv("QT_QPA_PLATFORM", "xcb");
-
     QGuiApplication app(argc, argv);
 
     if (argc < 4) {
