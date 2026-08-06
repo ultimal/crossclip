@@ -85,3 +85,9 @@ against an active on-path attacker.
 - Whole files/images are buffered in memory and sent as a single message, so
   very large files will use a correspondingly large amount of RAM on both
   ends.
+- **The Linux client requires XWayland.** Wayland only lets a client read or
+  write the clipboard while it holds keyboard focus, which a background
+  clipboard-sync client never has, so the client forces the `xcb` (X11)
+  backend on Linux and relies on XWayland for clipboard access. This is
+  present by default on most desktop sessions; if you've explicitly disabled
+  XWayland, clipboard sync won't work.

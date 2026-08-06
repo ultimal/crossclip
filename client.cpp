@@ -253,6 +253,14 @@ private:
 
 int main(int argc, char *argv[])
 {
+#ifdef Q_OS_LINUX
+    // Wayland only lets a client read/write the clipboard while it holds
+    // keyboard focus, which a headless/background client never has. Run
+    // under XWayland instead, where clipboard ownership just needs a window
+    // to exist. Windows/macOS are left alone to auto-select their backend.
+    qputenv("QT_QPA_PLATFORM", "xcb");
+#endif
+
     QGuiApplication app(argc, argv);
 
     if (argc < 4) {
